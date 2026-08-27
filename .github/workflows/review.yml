@@ -153,10 +153,24 @@ on:
       bcquality_sha:
         description: Resolved BCQuality commit SHA used for the review.
         value: ${{ jobs.review.outputs.bcquality_sha }}
+    secrets:
+      # Optional. Only needed when the engine repository (ENGINE_REPO) - or a
+      # BCQuality fork on the same host - is private/internal: GITHUB_TOKEN is
+      # scoped to the *calling* repository and cannot read them. A GitHub App
+      # with Contents:read installed on those repositories mints a short-lived
+      # token used solely for those checkouts. Leave unset for public repos.
+      engine_app_id:
+        description: App ID of a GitHub App with Contents:read on the engine repository (and BCQuality fork, if private).
+        required: false
+      engine_app_private_key:
+        description: PEM private key of that GitHub App.
+        required: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   ENGINE_REPO: microsoft/BC-ALReviewAgent
+  # Owner part of ENGINE_REPO; used to mint the optional App token.
+  ENGINE_OWNER: microsoft
 
 jobs:
   resolve:
@@ -265,6 +279,21 @@ jobs:
     outputs:
       bcquality_sha: ${{ steps.bcquality.outputs.sha }}
     steps:
+      - name: Mint engine checkout token
+        # Skipped when the optional App secrets are not provided (public engine).
+        if: ${{ secrets.engine_app_id != '' }}
+        id: engine_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.engine_app_id }}
+          private-key: ${{ secrets.engine_app_private_key }}
+          # The org/user hosting the engine repository, not the calling org.
+          owner: ${{ env.ENGINE_OWNER }}
+          # No `repositories:` filter - the App installation decides which repos
+          # (engine, and BCQuality fork if private) the token may read.
+          permission-contents: read
+          github-api-url: ${{ github.api_url }}
+
       - name: Checkout engine scripts
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -272,6 +301,7 @@ jobs:
           ref: ${{ inputs.engine_ref }}
           path: engine
           fetch-depth: 0
+          token: ${{ steps.engine_token.outputs.token || github.token }}
           persist-credentials: false
 
       - name: Checkout trusted target base
@@ -314,6 +344,7 @@ jobs:
           BCQUALITY_COUNTRIES: ${{ inputs.countries }}
           BCQUALITY_APPLICATION_AREA: ${{ inputs.application_area }}
           BCQUALITY_BC_VERSION: ${{ inputs.bc_version }}
+          ENGINE_TOKEN: ${{ steps.engine_token.outputs.token }}
         run: |
           $cfg = & "${{ github.workspace }}/engine/agents/ALReviewAgent/scripts/Get-BCQualityConfig.ps1"
           $repo = $cfg.bcquality.repo
@@ -321,12 +352,27 @@ jobs:
           $root = "${{ github.workspace }}/bcquality"
 
           Write-Host "Fetching BCQuality from $repo@$ref into $root"
+          # When BCQuality lives on this runner's GitHub host (private/internal
+          # fork), authenticate the fetch with the App token. Same mechanism as
+          # Invoke-GitCommandAuthenticated in Invoke-CopilotPRReview.ps1: a
+          # per-process GIT_CONFIG_* override, so the token touches neither
+          # .git/config nor the command line, and is dropped after the fetch.
+          $repoHost = ([uri]$repo).Host
+          $ghHost = ([uri]$env:GITHUB_SERVER_URL).Host
+          if ($env:ENGINE_TOKEN -and $repoHost -eq $ghHost) {
+            $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$env:ENGINE_TOKEN"))
+            $env:GIT_CONFIG_COUNT = '1'
+            $env:GIT_CONFIG_KEY_0 = "http.https://$repoHost/.extraheader"
+            $env:GIT_CONFIG_VALUE_0 = "AUTHORIZATION: basic $basic"
+            Write-Host "Using GitHub App token for $repoHost"
+          }
           # init + fetch + checkout so the ref may be a branch, tag, or pinned SHA
           # (`git clone --branch` does not accept raw commit SHAs).
           New-Item -ItemType Directory -Force -Path $root | Out-Null
           git -C $root init -q
           git -C $root remote add origin $repo
           git -C $root fetch --depth=1 origin "$ref"
+          Remove-Item Env:GIT_CONFIG_COUNT, Env:GIT_CONFIG_KEY_0, Env:GIT_CONFIG_VALUE_0 -ErrorAction SilentlyContinue
           if ($LASTEXITCODE -ne 0) { throw "git fetch of BCQuality ref '$ref' failed (exit $LASTEXITCODE)" }
           git -C $root checkout -q FETCH_HEAD
           if ($LASTEXITCODE -ne 0) { throw "git checkout of BCQuality ref '$ref' failed (exit $LASTEXITCODE)" }
@@ -406,6 +452,21 @@ jobs:
       run:
         shell: pwsh
     steps:
+      - name: Mint engine checkout token
+        # Skipped when the optional App secrets are not provided (public engine).
+        if: ${{ secrets.engine_app_id != '' }}
+        id: engine_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.engine_app_id }}
+          private-key: ${{ secrets.engine_app_private_key }}
+          # The org/user hosting the engine repository, not the calling org.
+          owner: ${{ env.ENGINE_OWNER }}
+          # No `repositories:` filter - the App installation decides which repos
+          # (engine, and BCQuality fork if private) the token may read.
+          permission-contents: read
+          github-api-url: ${{ github.api_url }}
+
       - name: Checkout engine scripts
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -413,6 +474,7 @@ jobs:
           ref: ${{ inputs.engine_ref }}
           path: engine
           fetch-depth: 0
+          token: ${{ steps.engine_token.outputs.token || github.token }}
           persist-credentials: false
 
       - name: Checkout trusted target base
