@@ -159,7 +159,7 @@ $DiffBaseRef = if ($ReviewSource -eq 'local') { $BaseRef } else { "origin/$BaseB
 # and would make three-dot fail with "no merge base".
 $DiffRange = if ((($env:REVIEW_DIFF_STYLE ?? '') + '').Trim().ToLowerInvariant() -eq 'direct') { "$DiffBaseRef..HEAD" } else { "$DiffBaseRef...HEAD" }
 $SummaryMarker    = '<!-- copilot-pr-review-summary -->'
-$BaseUrl          = "https://api.github.com/repos/$Repository"
+$BaseUrl          = "$((($env:GITHUB_API_URL ?? 'https://api.github.com')).TrimEnd('/'))/repos/$Repository"
 
 # Review phase. Splits the privileged single-job runner into a minimal-
 # permission "generate" phase (runs the tool-enabled Copilot CLI with a
@@ -457,11 +457,22 @@ function New-CopilotChildEnvironment {
     )
 
     $allowedKeys = @('PATH','HOME','USERPROFILE','TMP','TEMP','TMPDIR','APPDATA','LOCALAPPDATA',
-                     'SystemRoot','ComSpec','CI','TERM','LANG','LC_ALL','npm_config_prefix','NPM_CONFIG_PREFIX')
+                     'SystemRoot','ComSpec','CI','TERM','LANG','LC_ALL','npm_config_prefix','NPM_CONFIG_PREFIX','GH_HOST')
     $cleanEnv = @{}
     foreach ($key in $allowedKeys) {
         $val = [System.Environment]::GetEnvironmentVariable($key)
         if ($val) { $cleanEnv[$key] = $val }
+    }
+
+    # Copilot CLI authenticates against GH_HOST and defaults to github.com,
+    # which rejects a GHE.com (data-residency) or GHES token. A caller's
+    # top-level `env: GH_HOST` is not inherited by a reusable workflow, so when
+    # it is absent derive the host from the runner's own GITHUB_SERVER_URL.
+    if (-not $cleanEnv.ContainsKey('GH_HOST') -and $env:GITHUB_SERVER_URL) {
+        $serverHost = ([uri]$env:GITHUB_SERVER_URL).Host
+        if ($serverHost -and $serverHost -ne 'github.com') {
+            $cleanEnv['GH_HOST'] = $serverHost
+        }
     }
 
     if ($ReviewSource -eq 'local') {
@@ -512,8 +523,9 @@ function Invoke-GitCommandAuthenticated {
     }
 
     $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$token"))
+    $serverUrl = ($env:GITHUB_SERVER_URL ?? 'https://github.com').TrimEnd('/')
     $env:GIT_CONFIG_COUNT = '1'
-    $env:GIT_CONFIG_KEY_0 = 'http.https://github.com/.extraheader'
+    $env:GIT_CONFIG_KEY_0 = "http.$serverUrl/.extraheader"
     $env:GIT_CONFIG_VALUE_0 = "AUTHORIZATION: basic $basic"
     try {
         return Invoke-GitCommand -Arguments $Arguments
@@ -2842,7 +2854,10 @@ function Resolve-AgentLabel {
 }
 
 function Resolve-AgentCommentDocUrl {
-    $defaultUrl = 'https://github.com/microsoft/BCQuality'
+    # Default to the BCQuality repository this review actually consumed (from
+    # bcquality.config.yaml) so forks pointing at their own BCQuality get a
+    # matching feedback link without configuring AGENT_COMMENT_DOC_URL.
+    $defaultUrl = (Get-BCQualityRepoUrl) ?? 'https://github.com/microsoft/BCQuality'
     if (-not $AgentCommentDocUrlRaw) { return $defaultUrl }
     $uri = $null
     if (-not [System.Uri]::TryCreate($AgentCommentDocUrlRaw, [System.UriKind]::Absolute, [ref]$uri)) {
