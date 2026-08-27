@@ -171,6 +171,8 @@ env:
   ENGINE_REPO: microsoft/BC-ALReviewAgent
   # Owner part of ENGINE_REPO; used to mint the optional App token.
   ENGINE_OWNER: microsoft
+  # 'true' when the optional engine App secrets were passed by the caller.
+  HAS_ENGINE_APP: ${{ secrets.engine_app_id != '' }}
 
 jobs:
   resolve:
@@ -281,7 +283,8 @@ jobs:
     steps:
       - name: Mint engine checkout token
         # Skipped when the optional App secrets are not provided (public engine).
-        if: ${{ secrets.engine_app_id != '' }}
+        # (`secrets` is not available in step `if`, hence the job-level env flag.)
+        if: env.HAS_ENGINE_APP == 'true'
         id: engine_token
         uses: actions/create-github-app-token@v2
         with:
@@ -454,7 +457,8 @@ jobs:
     steps:
       - name: Mint engine checkout token
         # Skipped when the optional App secrets are not provided (public engine).
-        if: ${{ secrets.engine_app_id != '' }}
+        # (`secrets` is not available in step `if`, hence the job-level env flag.)
+        if: env.HAS_ENGINE_APP == 'true'
         id: engine_token
         uses: actions/create-github-app-token@v2
         with:
