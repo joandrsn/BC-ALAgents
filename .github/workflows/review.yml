@@ -49,7 +49,7 @@ on:
         required: false
         default: main
       config_path:
-        description: Path to the consumer's bcquality.config.yaml, relative to the target repo root. Empty uses the engine default baseline.
+        description: Path to the consumer's bcquality.config.yaml, relative to the target repo root. Empty - or a path that does not exist in the target repo - uses the engine default baseline, so a shared caller can pass one conventional path for every repository.
         type: string
         required: false
         default: ''

@@ -51,8 +51,9 @@ $ErrorActionPreference = 'Stop'
 if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
     $ConfigPath = ($env:BCQUALITY_CONFIG_PATH ?? '').Trim()
 }
+$baselineConfigPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'bcquality.config.yaml')
 if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
-    $ConfigPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'bcquality.config.yaml')
+    $ConfigPath = $baselineConfigPath
 }
 
 if (-not (Get-Module -ListAvailable -Name powershell-yaml)) {
@@ -61,7 +62,18 @@ if (-not (Get-Module -ListAvailable -Name powershell-yaml)) {
 Import-Module powershell-yaml -DisableNameChecking -ErrorAction Stop
 
 if (-not (Test-Path $ConfigPath)) {
-    throw "bcquality config not found: $ConfigPath"
+    # A consumer-supplied path (config_path input / BCQUALITY_CONFIG_PATH) that
+    # does not exist falls back to the engine baseline. This lets one shared
+    # caller pass a conventional path (e.g. .github/bcquality.config.yaml) for
+    # every repository while only repositories that actually carry the file
+    # override the defaults.
+    if ($ConfigPath -ne $baselineConfigPath) {
+        Write-Warning "bcquality config not found at '$ConfigPath'; using the engine default baseline instead."
+        $ConfigPath = $baselineConfigPath
+    }
+    if (-not (Test-Path $ConfigPath)) {
+        throw "bcquality config not found: $ConfigPath"
+    }
 }
 
 function Split-CsvOverride {
